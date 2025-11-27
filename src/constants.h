@@ -1,49 +1,53 @@
-//-----------------------------------
-// ESP-32 Wearable Biometric Watch
-// constants.h
-// Written 11.27.25 
-// Modified by Jason Sharer
-//-----------------------------------
-
-// constants.h
+// constants.h (reduced buffer/size for faster fill, lower thresholds)
 #ifndef CONSTANTS_H
 #define CONSTANTS_H
 
 // Serial and Delay Config
-#define BAUD_RATE 115200             // Serial baud rate for debugging (unused after switching to BLE; standard value for fast comms without errors)
-#define SHORT_DELAY 1000             // ms delay after init for hardware stabilization (reduce to 500 if boot feels slow)
+#define BAUD_RATE 115200
+#define SHORT_DELAY 1000
 
-// I2C Pins and Speed (Board-Specific for Waveshare ESP32-S3 Touch LCD 1.69)
-#define SDA_PIN 11                   // I2C data pin; shared with touch/RTC/IMU on this board
-#define SCL_PIN 10                   // I2C clock pin; shared as above
-#define I2C_SPEED 400000             // I2C clock speed in Hz (400kHz fast; drop to 100000 if comms flaky due to long wires/noise)
+// Logging Config
+#define ENABLE_SERIAL_LOGGING true
+#define ENABLE_FILE_LOGGING false
+
+// I2C Pins and Speed
+#define SDA_PIN 11
+#define SCL_PIN 10
+#define I2C_SPEED 400000
 
 // Sensor Buffer and Sampling Config
-#define MY_BUFFER_SIZE 100           // Number of samples in rolling buffer (~1s at 100Hz effective rate; smaller=50 for faster loops, larger=200 for smoother HR/SpO2)
-#define SLIDING_ADDITIONS 10         // New samples added per loop cycle (balances update frequency vs. CPU load; 10=~0.1s updates)
-#define SAMPLE_TIMEOUT_MS 5000       // Max ms wait for a single sensor sample (prevents infinite loops on hardware failure)
-#define MIN_IR_THRESHOLD 50000       // Minimum IR value for valid signal (below this = poor skin contact or noise; tune via testing, e.g., 30000 for darker skin or low light)
+#define MY_BUFFER_SIZE 50            // Reduced for faster initial fill (~1s at 50Hz)
+#define SLIDING_ADDITIONS 2          // Reduced for quicker updates
+#define SAMPLE_TIMEOUT_MS 1000       // Reduced per-sample wait
+#define MIN_IR_THRESHOLD 10000       // Lower for testing
+#define MIN_PULSATILE_RANGE 100      // Lower
+#define CONSECUTIVE_VALID_REQUIRED 3
 
-// Sensor Hardware Parameters (Optimized for MAX30102 on Wrist)
-#define LED_BRIGHTNESS 100           // LED intensity (0-255; higher=better signal but more battery drain; consider dynamic adjustment later)
-#define SAMPLE_AVERAGE 16            // Number of internal averages per sample (1-32; higher=smoother but slower readout)
-#define SAMPLE_RATE 400              // Sampling frequency in Hz (50-3200; 400 is good balance; lower=100 for battery saving)
-#define PULSE_WIDTH 411              // LED pulse width in us (69-411; max=411 for best SNR in noisy environments)
-#define ADC_RANGE 8192               // ADC resolution (2048-16384; higher=more precision but slight perf hit)
+// Sensor Hardware Parameters
+#define LED_BRIGHTNESS 255           // Max
+#define SAMPLE_AVERAGE 32
+#define SAMPLE_RATE 50
+#define PULSE_WIDTH 411
+#define ADC_RANGE 16384
 #define LED_MODE 2
 
-// Loop and Display Config
-#define UPDATE_DELAY_MS 250          // ms delay between loop cycles (shorter=100 for more real-time feel, but higher CPU/battery use)
-#define LCD_DC 4                     // Display data/command pin (SPI control)
-#define LCD_CS 5                     // Display chip select pin
-#define LCD_SCK 6                    // Display clock pin
-#define LCD_MOSI 7                   // Display data out pin
-#define LCD_RST 8                    // Display reset pin
-#define LCD_BL 15                    // Display backlight pin
-#define LCD_WIDTH 240                // Display resolution width in pixels
-#define LCD_HEIGHT 280               // Display resolution height in pixels
+// Smoothing Config
+#define SMA_WINDOW_SIZE 5
+#define HR_HISTORY_SIZE 5
+#define MAX_HR_JUMP 20
 
-// Future Expansions (Added for Later Steps)
-#define MAX_BUFFER_ENTRIES 100       // Size of timestamped data log buffer (for RTC integration)
+// Loop and Display Config
+#define UPDATE_DELAY_MS 500
+#define LCD_DC 4
+#define LCD_CS 5
+#define LCD_SCK 6
+#define LCD_MOSI 7
+#define LCD_RST 8
+#define LCD_BL 15
+#define LCD_WIDTH 240
+#define LCD_HEIGHT 280
+
+// Future Expansions
+#define MAX_BUFFER_ENTRIES 100
 
 #endif

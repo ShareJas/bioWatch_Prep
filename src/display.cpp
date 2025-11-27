@@ -1,3 +1,4 @@
+// display.cpp
 //-----------------------------------
 // ESP-32 Wearable Biometric Watch
 // display.cpp
@@ -20,7 +21,7 @@ void DisplayManager::init() {
 }
 
 void DisplayManager::updateMetrics(int hr, int spo2, bool validHR, bool validSpO2) {
-    gfx->fillRect(10, 10, 200, 60, BLACK);
+    gfx->fillRect(10, 10, 200, 60, BLACK);  // Clear small area for efficiency
     gfx->setCursor(10, 10);
     gfx->setTextColor(RED);
     gfx->setTextSize(2);

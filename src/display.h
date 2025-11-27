@@ -1,9 +1,11 @@
+// display.h
 //-----------------------------------
 // ESP-32 Wearable Biometric Watch
 // display.h
 // Written 11.27.25 
 // Modified by Jason Sharer
 //-----------------------------------
+// display.h
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
