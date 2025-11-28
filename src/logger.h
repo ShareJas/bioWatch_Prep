@@ -1,22 +1,27 @@
-// logger.h
+/// logger.h
+// ESP32-S3 Biometric Watch – Logger Header (Final 2025 Version)
+// Updated: November 28, 2025
+
 #ifndef LOGGER_H
 #define LOGGER_H
 
 #include <Arduino.h>
-#include "constants.h"
-#include <LittleFS.h>
 #include <FS.h>
+#include <LittleFS.h>
+#include "constants.h"   // For ENABLE_SERIAL_LOGGING / ENABLE_FILE_LOGGING flags
 
 class LoggerManager {
 public:
-    bool init();
+    bool init();                    // Initialize serial + optional file logging
     void logMessage(const String& msg);
-    ~LoggerManager();          // ← ADD THIS LINE
+
+    ~LoggerManager();               // Ensures file is closed cleanly on reboot/shutdown
 
 private:
-    File logFile;
+    static File logFile;            // The open log file handle
+    static uint8_t flushCounter;    // Counts lines between flushes
 };
 
-extern LoggerManager logger;
+extern LoggerManager logger;        // Global instance used everywhere
 
-#endif
+#endif // LOGGER_H

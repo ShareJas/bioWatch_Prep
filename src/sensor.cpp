@@ -7,6 +7,9 @@
 #include "constants.h"
 #include "logger.h"
 
+#define SAFE_MAX(a, b) ((a) > (b) ? (a) : (b))
+#define SAFE_MIN(a, b) ((a) < (b) ? (a) : (b))
+
 // Static member definition (one copy for the whole class)
 uint8_t SensorManager::currentLedBrightness = LED_BRIGHTNESS_DEFAULT;
 
@@ -93,34 +96,76 @@ bool SensorManager::updateSlidingWindow() {
 // ===================================================================
 // SIGNAL QUALITY & LED AUTO-ADJUST
 // ===================================================================
-
 bool SensorManager::checkSignalQuality() {
-    int32_t minIR = *min_element(irBuffer, irBuffer + MY_BUFFER_SIZE);
-    int32_t maxIR = *max_element(irBuffer, irBuffer + MY_BUFFER_SIZE);
-    int32_t pulsatile = maxIR - minIR;
-
-    // FASTER LED ADJUSTMENT — every cycle!
-    if (minIR < 30000 && currentLedBrightness < 255) {
-        currentLedBrightness = min((uint8_t)255, currentLedBrightness + 40);
-        particleSensor.setPulseAmplitudeRed(currentLedBrightness);
-        particleSensor.setPulseAmplitudeIR(currentLedBrightness);
-        logger.logMessage("LED ↑ " + String(currentLedBrightness));
-    }
-    else if (minIR > 180000 && currentLedBrightness > 60) {
-        currentLedBrightness = max((uint8_t)40, currentLedBrightness - 30);
-        particleSensor.setPulseAmplitudeRed(currentLedBrightness);
-        particleSensor.setPulseAmplitudeIR(currentLedBrightness);
-        logger.logMessage("LED ↓ " + String(currentLedBrightness));
+    int32_t minIR = irBuffer[0], maxIR = irBuffer[0];
+    int32_t minRed = redBuffer[0], maxRed = redBuffer[0];
+    
+    for (int i = 1; i < MY_BUFFER_SIZE; i++) {
+        if (irBuffer[i] < minIR) minIR = irBuffer[i];
+        if (irBuffer[i] > maxIR) maxIR = irBuffer[i];
+        if (redBuffer[i] < minRed) minRed = redBuffer[i];
+        if (redBuffer[i] > maxRed) maxRed = redBuffer[i];
     }
 
-    bool good = (minIR >= 40000) && (pulsatile >= 8000);
+    int32_t irPulsatile = maxIR - minIR;
+    int32_t redPulsatile = maxRed - minRed;
+
+    // DEBUG (keep for now, remove later)
+    logger.logMessage("IR: " + String(minIR) + "-" + String(maxIR) + 
+                      " (pulse=" + String(irPulsatile) + ")" +
+                      " | Red: " + String(minRed) + "-" + String(maxRed) +
+                      " (pulse=" + String(redPulsatile) + ")" +
+                      " | LED=" + String(currentLedBrightness));
+
+    // FASTER AUTO-LED — inspired by Maxim's SNR optimization
+    if (maxIR > 240000 || maxRed > 240000 || irPulsatile > 200000) {  // Saturation or overdrive
+        currentLedBrightness -= 25;
+        if (currentLedBrightness < 20) currentLedBrightness = 20;
+        particleSensor.setPulseAmplitudeRed(currentLedBrightness);
+        particleSensor.setPulseAmplitudeIR(currentLedBrightness);
+        logger.logMessage("SATURATION/NOISE → LED ↓ to " + String(currentLedBrightness));
+    } else if (irPulsatile < 6000 || redPulsatile < 3000 || minIR < 20000) {  // Weak/no signal
+        currentLedBrightness += 30;
+        if (currentLedBrightness > 120) currentLedBrightness = 120;
+        particleSensor.setPulseAmplitudeRed(currentLedBrightness);
+        particleSensor.setPulseAmplitudeIR(currentLedBrightness);
+        logger.logMessage("WEAK/NOISE → LED ↑ to " + String(currentLedBrightness));
+    }
+
+    bool good = (maxIR < 240000) && (maxRed < 240000) &&
+                (irPulsatile >= 6000) && (redPulsatile >= 3000) &&
+                (minIR >= 20000);  // Ensure minimum DC level
+
     validCycleCount = good ? validCycleCount + 1 : 0;
-    return (validCycleCount >= 2);  // Only 2 good cycles needed!
+    return (validCycleCount >= 1);
 }
 
 // ===================================================================
 // SMOOTHING & CALCULATION
 // ===================================================================
+void SensorManager::bandPassFilterBuffers() {
+    // Simple band-pass filter (0.5–4 Hz for PPG, removes DC and high-frequency noise)
+    const float alpha = 0.95;  // High-pass alpha (0.5 Hz cutoff at 100 Hz sample)
+    const float beta = 0.1;    // Low-pass beta (4 Hz cutoff)
+
+    int32_t hp_ir = irBuffer[0];
+    int32_t hp_red = redBuffer[0];
+    int32_t lp_ir = irBuffer[0];
+    int32_t lp_red = redBuffer[0];
+
+    irBuffer[0] = lp_ir = hp_ir = irBuffer[0];
+    redBuffer[0] = lp_red = hp_red = redBuffer[0];
+
+    for (int i = 1; i < MY_BUFFER_SIZE; i++) {
+        hp_ir = alpha * hp_ir + alpha * (irBuffer[i] - irBuffer[i-1]);
+        lp_ir = beta * hp_ir + (1 - beta) * lp_ir;
+        irBuffer[i] = lp_ir;
+
+        hp_red = alpha * hp_red + alpha * (redBuffer[i] - redBuffer[i-1]);
+        lp_red = beta * hp_red + (1 - beta) * lp_red;
+        redBuffer[i] = lp_red;
+    }
+}
 
 void SensorManager::applySmoothingToBuffers() {
     int32_t tempIR[MY_BUFFER_SIZE];
@@ -144,10 +189,23 @@ void SensorManager::applySmoothingToBuffers() {
 }
 
 void SensorManager::calculateHRSpO2() {
-    int32_t n_spo2;
-    int8_t  valid_spo2;
-    int32_t n_hr;
-    int8_t  valid_hr;
+    // 1. Remove DC component — THIS IS MANDATORY
+    long ir_mean = 0, red_mean = 0;
+    for (int i = 0; i < MY_BUFFER_SIZE; i++) {
+        ir_mean  += irBuffer[i];
+        red_mean += redBuffer[i];
+    }
+    ir_mean  /= MY_BUFFER_SIZE;
+    red_mean /= MY_BUFFER_SIZE;
+
+    for (int i = 0; i < MY_BUFFER_SIZE; i++) {
+        irBuffer[i]  -= ir_mean;
+        redBuffer[i] -= red_mean;
+    }
+
+    // 2. Run algorithm on AC-coupled data
+    int32_t n_spo2, n_hr;
+    int8_t  valid_spo2, valid_hr;
 
     maxim_heart_rate_and_oxygen_saturation(
         (uint32_t*)irBuffer, MY_BUFFER_SIZE,
@@ -156,21 +214,21 @@ void SensorManager::calculateHRSpO2() {
         &n_hr, &valid_hr
     );
 
-    if (valid_hr && n_hr >= 40 && n_hr <= 200) {
-        // Only accept reasonable HR
-        heartRate = n_hr;
-        validHeartRate = true;
-        smoothHR();
-    } else {
-        validHeartRate = false;
+    // 3. Restore DC
+    for (int i = 0; i < MY_BUFFER_SIZE; i++) {
+        irBuffer[i]  += ir_mean;
+        redBuffer[i] += red_mean;
     }
 
-    if (valid_spo2 && n_spo2 >= 70 && n_spo2 <= 100) {
-        spo2 = n_spo2;
-        validSpo2 = true;
-    } else {
-        validSpo2 = false;
+    // 4. Final results
+    validHeartRate = (valid_hr && n_hr >= 40 && n_hr <= 200);
+    if (validHeartRate) {
+        heartRate = n_hr;
+        smoothHR();
     }
+
+    validSpo2 = (valid_spo2 && n_spo2 >= 70 && n_spo2 <= 100);
+    spo2 = validSpo2 ? n_spo2 : 0;
 }
 
 void SensorManager::smoothHR() {

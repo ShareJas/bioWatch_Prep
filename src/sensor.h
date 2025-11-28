@@ -34,6 +34,7 @@ public:
     bool fillInitialBuffer();             // Fill buffer on first run
     bool updateSlidingWindow();           // Shift + add new samples
     bool checkSignalQuality();            // Finger detection + pulsatile check
+    void bandPassFilterBuffers();         // Band Pass Filter
     void applySmoothingToBuffers();       // Simple moving average filter
     void calculateHRSpO2();               // Run Maxim algorithms + post-process
     void softReset();                     // Full sensor reset + re-init

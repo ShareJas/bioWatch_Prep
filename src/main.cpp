@@ -1,6 +1,5 @@
 // main.cpp
-// ESP32-S3 Wearable Biometric Watch
-// Fully fixed & production-ready version
+// ESP32-S3 Wearable Biometric Watch – FINAL STABLE VERSION
 // Updated: November 28, 2025
 
 #include <Arduino.h>
@@ -10,11 +9,9 @@
 #include "logger.h"
 
 // ------------------- USB Serial (Modern ESP32-S3 Way) -------------------
-// HWCDC.h is deprecated. Use built-in Serial (automatically maps to USB CDC)
-#define USBSerial Serial  // Just alias it — works on all ESP32-S3 boards
+#define USBSerial Serial  // Native USB CDC – no HWCDC needed
 
-// ------------------- Global Buffers & Results (Single Source!) -------------------
-// These are the ONLY definitions — sensor.cpp only has extern declarations
+// ------------------- Global Buffers & Results -------------------
 int32_t irBuffer[MY_BUFFER_SIZE];
 int32_t redBuffer[MY_BUFFER_SIZE];
 
@@ -30,14 +27,14 @@ DisplayManager display;
 // ------------------- Runtime State -------------------
 static bool firstRun = true;
 unsigned long cycleCount = 0;
-int errorCount = 0;
+static uint8_t consecutiveGoodCycles = 0;
 
-// ------------------- Watchdog (Critical for long buffer fill) -------------------
+// ------------------- Watchdog -------------------
 #include <esp_task_wdt.h>
 
 void enableWatchdog() {
-    esp_task_wdt_init(12, true);    // 12-second timeout, panic = reset
-    esp_task_wdt_add(NULL);         // Add current task
+    esp_task_wdt_init(12, true);    // 12-second timeout → plenty for 50-sample fill
+    esp_task_wdt_add(NULL);
 }
 
 void feedWatchdog() {
@@ -46,115 +43,157 @@ void feedWatchdog() {
 
 // ------------------- Setup -------------------
 void setup() {
-    // USB Serial (native on ESP32-S3)
     USBSerial.begin(BAUD_RATE);
-    while (!USBSerial && millis() < 3000);  // Wait up to 3s for serial monitor
+    while (!USBSerial && millis() < 3000);  // Wait for serial monitor
 
-    USBSerial.println("\n=== ESP32-S3 Biometric Watch Starting ===");
-    
-    delay(SHORT_DELAY);  // Let power settle
+    USBSerial.println(F("\n=== ESP32-S3 BioWatch Starting ==="));
+    delay(SHORT_DELAY);
 
-    // Initialize logging first
-    if (!logger.init()) {
-        USBSerial.println("Logger init failed — continuing without file logging");
-    }
-
-    // Enable watchdog early (before long sensor init)
+    logger.init();                    // Logging first (optional file logging)
     enableWatchdog();
 
-    // Initialize display first so we can see errors
     display.init();
-    display.updateMetrics(0, 0, false, false);  // Show blank
+    display.updateMetrics(0, 0, false, false);
 
-    // Initialize sensor
-    if (!sensor.init()) {
-        logger.logMessage("FATAL: MAX30102 not found or I2C failed!");
+    // --- Sensor Init (with retry logic) ---
+    int initAttempts = 0;
+    while (!sensor.init() && initAttempts < 3) {
+        logger.logMessage("MAX30102 init failed – retry " + String(++initAttempts));
+        delay(500);
+        feedWatchdog();
+    }
+    if (initAttempts >= 3) {
+        logger.logMessage("FATAL: MAX30102 not responding – halting");
         display.updateMetrics(0, 0, false, false);
-        USBSerial.println("Sensor failed — halting");
-        while (true) {
-            feedWatchdog();
-            delay(1000);
-        }
+        while (true) { feedWatchdog(); delay(1000); }
     }
 
-    logger.logMessage("System ready. Place finger on sensor.");
+    logger.logMessage("System ready – place finger on sensor");
     firstRun = true;
     cycleCount = 0;
-    errorCount = 0;
-}
-
-// ------------------- Cycle Helpers -------------------
-unsigned long startCycle() {
-    feedWatchdog();
-    cycleCount++;
-    logger.logMessage("--- Cycle #" + String(cycleCount) + " ---");
-    return millis();
-}
-
-void showNoSignal() {
-    display.updateMetrics(0, 0, false, false);
-    delay(UPDATE_DELAY_MS);
+    consecutiveGoodCycles = 0;
 }
 
 // ------------------- Main Loop -------------------
 void loop() {
-    unsigned long cycleStart = startCycle();
+    feedWatchdog();
+    unsigned long cycleStart = millis();
+    cycleCount++;
 
-    bool success = false;
+    if (cycleCount % 10 == 1) {  // Log only every ~2 seconds to reduce spam
+        logger.logMessage("--- Cycle #" + String(cycleCount) + " ---");
+    }
 
+    bool sampleSuccess = false;
+
+    // =========================================================
+    // 1. Fill initial buffer (only on first run or after reset)
+    // =========================================================
     if (firstRun) {
-        logger.logMessage("Filling initial buffer...");
-        success = sensor.fillInitialBuffer();
-        firstRun = false;
-    } else {
-        success = sensor.updateSlidingWindow();
-    }
+        logger.logMessage("Filling initial buffer (50 samples @ ~100Hz)...");
+        display.updateMetrics(0, 0, false, false);
+        gfx->setTextSize(2); gfx->setTextColor(0xFFFF);
+        gfx->setCursor(20, 120); gfx->print("Reading sensor...");
 
-    if (!success) {
-        errorCount++;
-        logger.logMessage("Sample timeout (error #" + String(errorCount) + ")");
-        if (errorCount > 8) {
-            logger.logMessage("Too many errors — reinitializing sensor");
+        sampleSuccess = sensor.fillInitialBuffer();
+
+        if (!sampleSuccess) {
+            logger.logMessage("Initial fill timeout – restarting sensor");
             sensor.softReset();
-            errorCount = 0;
-            firstRun = true;  // Force refull
+            firstRun = true;           // Try again next loop
+            delay(500);
+            return;
         }
-        showNoSignal();
-        return;
+
+        // After filling, immediately check signal quality
+        if (!sensor.checkSignalQuality()) {
+            logger.logMessage("No finger detected after fill – waiting...");
+            display.updateMetrics(0, 0, false, false);
+            firstRun = false;          // Allow sliding window next cycle
+            consecutiveGoodCycles = 0;
+            delay(UPDATE_DELAY_MS);
+            return;
+        }
+
+        firstRun = false;
+        logger.logMessage("Initial buffer filled & finger detected!");
+    }
+    // =========================================================
+    // 2. Normal operation – sliding window update
+    // =========================================================
+    else {
+        sampleSuccess = sensor.updateSlidingWindow();
+        if (!sampleSuccess) {
+            logger.logMessage("Sample timeout during sliding window");
+            consecutiveGoodCycles = 0;
+            showNoFingerMessage();
+            delay(UPDATE_DELAY_MS);
+            return;
+        }
     }
 
-    // Good sample — reset error counter
-    errorCount = 0;
-
+    // =========================================================
+    // 3. Pre-processing
+    // =========================================================
     sensor.applySmoothingToBuffers();
-    
+    sensor.bandPassFilterBuffers();        // ← Re-enabled: essential for clean signal!
+
+    // =========================================================
+    // 4. Signal Quality Check (finger detection)
+    // =========================================================
     if (!sensor.checkSignalQuality()) {
-        logger.logMessage("Poor signal quality — waiting for finger");
-        showNoSignal();
+        consecutiveGoodCycles = 0;
+        showNoFingerMessage();
+        delay(UPDATE_DELAY_MS);
         return;
     }
 
+    // Finger is on → require several consecutive good cycles before trusting
+    consecutiveGoodCycles++;
+    if (consecutiveGoodCycles < CONSECUTIVE_VALID_REQUIRED) {
+        logger.logMessage("Finger detected – stabilizing... (" + String(consecutiveGoodCycles) + "/" + String(CONSECUTIVE_VALID_REQUIRED) + ")");
+        display.updateMetrics(0, 0, false, false);
+        delay(UPDATE_DELAY_MS);
+        return;
+    }
+
+    // =========================================================
+    // 5. Calculate HR & SpO2
+    // =========================================================
     sensor.calculateHRSpO2();
 
-    // Log results
-    logger.logMessage("Raw IR: " + String(irBuffer[MY_BUFFER_SIZE-1]) + 
-                      " | Red: " + String(redBuffer[MY_BUFFER_SIZE-1]));
-    
+    // =========================================================
+    // 6. Display & Log Results
+    // =========================================================
+    display.updateMetrics(heartRate, spo2, validHeartRate, validSpo2);
+
     if (validHeartRate && validSpo2) {
         logger.logMessage("HR: " + String(heartRate) + " bpm | SpO2: " + String(spo2) + "%");
     } else if (validHeartRate) {
         logger.logMessage("HR: " + String(heartRate) + " bpm | SpO2: ---");
     } else {
-        logger.logMessage("No valid reading yet");
+        logger.logMessage("Calculating...");
     }
 
-    // Update display
-    display.updateMetrics(heartRate, spo2, validHeartRate, validSpo2);
+    // Optional: log cycle time every 10 cycles
+    if (cycleCount % 10 == 0) {
+        unsigned long cycleTime = millis() - cycleStart;
+        logger.logMessage("Cycle time: " + String(cycleTime) + " ms");
+    }
 
-    // Performance logging
-    unsigned long cycleTime = millis() - cycleStart;
-    logger.logMessage("Cycle time: " + String(cycleTime) + " ms");
-
-    feedWatchdog();
     delay(UPDATE_DELAY_MS);
+}
+
+// =========================================================
+// Helper: Show "no finger" screen
+// =========================================================
+void showNoFingerMessage() {
+    display.updateMetrics(0, 0, false, false);
+    gfx->fillScreen(0x0000);
+    gfx->setTextSize(2);
+    gfx->setTextColor(0xFFFF);
+    gfx->setCursor(30, 100);
+    gfx->print("Place finger");
+    gfx->setCursor(50, 140);
+    gfx->print("on sensor");
 }

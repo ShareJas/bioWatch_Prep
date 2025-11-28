@@ -20,23 +20,23 @@
 
 // ====================== MAX30102 Sensor Config ======================
 // These are the "gold standard" settings used by Maxim, SparkFun, and real products
-#define MY_BUFFER_SIZE          100       // 100 samples = 1 second at 100 Hz → perfect for algorithm
-#define SLIDING_ADDITIONS       25        // Update with 25 new samples → new reading every ~250 ms
+#define MY_BUFFER_SIZE          50       // 100 samples = 1 second at 100 Hz → perfect for algorithm
+#define SLIDING_ADDITIONS       12        // Update with 25 new samples → new reading every ~250 ms
 
 #define SAMPLE_RATE             100       // 100 Hz – best balance of accuracy and power
 #define SAMPLE_AVERAGE          4         // 4-sample average inside sensor
 #define LED_MODE                2         // 2 LEDs (Red + IR)
-#define PULSE_WIDTH             411       // 411 µs → 18-bit resolution
+#define PULSE_WIDTH             215       // 411 µs → 18-bit resolution
 #define ADC_RANGE               4096      // 11.0 pA per LSB – standard for wearable
 
-#define LED_BRIGHTNESS_DEFAULT  80        // Start at ~6 mA – safe, good signal, low heat
+#define LED_BRIGHTNESS_DEFAULT  60        // Start at ~6 mA – safe, good signal, low heat
 #define LED_BRIGHTNESS_MAX      255       // 50 mA max (0xFF)
 
 // ====================== Signal Quality Thresholds ======================
 // These are REAL values from finger-on-sensor testing (not bench/no-finger)
-#define MIN_IR_THRESHOLD        40000     // Below this = no finger or very poor contact
-#define MIN_PULSATILE_RANGE     8000      // AC component must be at least this big
-#define CONSECUTIVE_VALID_REQUIRED 2      // Need 3 good cycles in a row before trusting
+#define MIN_IR_THRESHOLD        50000     // Below this = no finger or very poor contact
+#define MIN_PULSATILE_RANGE     3000      // AC component must be at least this big
+#define CONSECUTIVE_VALID_REQUIRED 1      // Need 3 good cycles in a row before trusting
 
 // Timeout for reading one sample (prevents hard lockups)
 #define SAMPLE_TIMEOUT_MS       100
@@ -44,7 +44,7 @@
 // ====================== Smoothing & Stability ======================
 #define SMA_WINDOW_SIZE         5         // Moving average on raw samples
 #define HR_HISTORY_SIZE         8         // Average last 8 valid HR readings
-#define MAX_HR_JUMP             18        // Reject jumps >18 bpm (physiological limit ~15–20 bpm per beat)
+#define MAX_HR_JUMP             20        // Reject jumps >18 bpm (physiological limit ~15–20 bpm per beat)
 
 // ====================== Display (ST7789 240x280) ======================
 #define LCD_DC                  4
