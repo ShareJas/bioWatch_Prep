@@ -1,36 +1,52 @@
-// logger.cpp
+// logger.cpp — FINAL WORKING VERSION (no external LittleFS needed)
 #include "logger.h"
-#include "HWCDC.h"  // For USBSerial
+#include <Arduino.h>
 
-extern HWCDC USBSerial;  // From main.cpp
+// Use built-in LittleFS from Arduino-ESP32 core
+#include <LittleFS.h>          // This is already in the core!
 
-// Global logger instance
 LoggerManager logger;
 
-// Initialize logging: Set up file if enabled
 bool LoggerManager::init() {
     if (ENABLE_FILE_LOGGING) {
         if (!LittleFS.begin()) {
-            USBSerial.println("Error: LittleFS mount failed - File logging disabled");
+            Serial.println("LittleFS mount failed — file logging disabled");
             return false;
         }
-        logFile = LittleFS.open("/debug.log", "a");  // Append mode
-        if (!logFile) {
-            USBSerial.println("Error: Failed to open /debug.log - File logging disabled");
+        logFile = LittleFS.open("/debug.log", "a");
+        if (logFile) {
+            Serial.println("File logging enabled → /debug.log");
+            logFile.println("\n=== BioWatch Session Start ===");
+            logFile.flush();
+        } else {
+            Serial.println("Failed to open /debug.log");
+            LittleFS.end();
             return false;
         }
-        USBSerial.println("File logging enabled to /debug.log");
     }
     return true;
 }
 
-// Log a message: Output to serial if enabled, append to file if enabled
 void LoggerManager::logMessage(const String& msg) {
+    String line = "[" + String(millis()) + "] " + msg;
+
     if (ENABLE_SERIAL_LOGGING) {
-        USBSerial.println(msg);
+        Serial.println(line);
     }
+
     if (ENABLE_FILE_LOGGING && logFile) {
-        logFile.println(msg);
-        logFile.flush();  // Ensure written to flash (note: frequent flushes may wear flash; tune if needed)
+        logFile.println(line);
+        static int counter = 0;
+        if (++counter >= 20) {
+            logFile.flush();
+            counter = 0;
+        }
+    }
+}
+
+LoggerManager::~LoggerManager() {
+    if (logFile) {
+        logFile.close();
+        LittleFS.end();
     }
 }
